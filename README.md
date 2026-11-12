@@ -62,32 +62,20 @@ Prebuilt archives are published for Linux x86_64 and ARM64, macOS Intel
 [GitHub Releases](https://github.com/dedgh0st/clim/releases/latest) to see all
 downloads and release notes.
 
-#### macOS
+#### macOS & Linux
 
-Choose the archive for your Mac:
+Choose the matching archive from [GitHub Releases](https://github.com/dedgh0st/clim/releases/latest)
+and replace `<release>` below with its name without the `.tar.gz` extension:
 
-```sh
-# Apple Silicon
-curl -fL https://github.com/dedgh0st/clim/releases/latest/download/clim-aarch64-apple-darwin.tar.gz -o clim.tar.gz
-
-# Intel
-curl -fL https://github.com/dedgh0st/clim/releases/latest/download/clim-x86_64-apple-darwin.tar.gz -o clim.tar.gz
-
-tar -xzf clim.tar.gz
-sudo install -m 755 clim /usr/local/bin/clim
-```
-
-#### Linux
+- Apple Silicon Mac: `clim-aarch64-apple-darwin`
+- Intel Mac: `clim-x86_64-apple-darwin`
+- Linux x86_64: `clim-x86_64-unknown-linux-gnu`
+- Linux ARM64: `clim-aarch64-unknown-linux-gnu`
 
 ```sh
-# x86_64
-curl -fL https://github.com/dedgh0st/clim/releases/latest/download/clim-x86_64-unknown-linux-gnu.tar.gz -o clim.tar.gz
-
-# ARM64
-curl -fL https://github.com/dedgh0st/clim/releases/latest/download/clim-aarch64-unknown-linux-gnu.tar.gz -o clim.tar.gz
-
+curl -fL https://github.com/dedgh0st/clim/releases/latest/download/<release>.tar.gz -o clim.tar.gz
 tar -xzf clim.tar.gz
-sudo install -m 755 clim /usr/local/bin/clim
+sudo install -m 755 ./clim /usr/local/bin/clim
 ```
 
 #### Windows
@@ -95,8 +83,11 @@ sudo install -m 755 clim /usr/local/bin/clim
 Run the following in PowerShell to install the latest x64 release in your
 user-local programs directory and add it to your user `PATH`:
 
+Replace `<release>` with the matching archive name without the `.zip`
+extension: `clim-x86_64-pc-windows-msvc`.
+
 ```powershell
-$release = "https://github.com/dedgh0st/clim/releases/latest/download/clim-x86_64-pc-windows-msvc.zip"
+$release = "https://github.com/dedgh0st/clim/releases/latest/download/<release>.zip"
 $archive = Join-Path $env:TEMP "clim.zip"
 $installDir = Join-Path $env:LOCALAPPDATA "Programs\clim"
 
@@ -186,8 +177,8 @@ push a matching version tag. For example:
 
 ```sh
 cargo check
-git tag v0.1.1
-git push origin v0.1.1
+git tag <version>
+git push origin <version>
 ```
 
 The release workflow builds platform archives, creates a GitHub Release with
