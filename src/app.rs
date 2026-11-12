@@ -13,6 +13,7 @@ pub struct PackageManager {
     pub version: Option<String>,
     pub detected: bool,
     pub selected: bool,
+    pub update_availability: Option<UpdateAvailability>,
 }
 
 impl PackageManager {
@@ -23,6 +24,7 @@ impl PackageManager {
             version: None,
             detected: false,
             selected: false,
+            update_availability: None,
         }
     }
 }
@@ -32,6 +34,15 @@ pub struct DetectedInfo {
     pub path: String,
     pub version: Option<String>,
     pub diagnostic: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateAvailability {
+    Checking,
+    UpToDate { current: String, latest: String },
+    Available { current: String, latest: String },
+    Unavailable(String),
+    Failed(String),
 }
 
 #[derive(Debug)]
@@ -48,6 +59,12 @@ pub enum AppEvent {
         position: usize,
         total: usize,
     },
+    UpdateCheckStarted,
+    UpdateCheckResult {
+        index: usize,
+        result: UpdateAvailability,
+    },
+    UpdateCheckFinished,
     UpdateFinished(Vec<String>),
 }
 
@@ -63,6 +80,7 @@ pub struct App {
     pub updating_index: Option<usize>,
     pub update_position: usize,
     pub update_total: usize,
+    pub checking_updates: bool,
 }
 
 impl App {
@@ -82,6 +100,7 @@ impl App {
             updating_index: None,
             update_position: 0,
             update_total: 0,
+            checking_updates: false,
         }
     }
 
@@ -167,6 +186,9 @@ impl App {
                 self.updating_index = Some(index);
                 self.update_position = position;
                 self.update_total = total;
+                if let Some(item) = self.items.get_mut(index) {
+                    item.update_availability = None;
+                }
                 self.list_state.select(Some(index + 1));
                 self.status = format!(
                     "Updating {} ({position}/{total})...",
@@ -175,6 +197,56 @@ impl App {
                         .map(|item| item.name.as_str())
                         .unwrap_or("package manager")
                 );
+            }
+            AppEvent::UpdateCheckStarted => {
+                self.checking_updates = true;
+                for item in &mut self.items {
+                    if item.detected {
+                        item.update_availability = Some(UpdateAvailability::Checking);
+                    }
+                }
+                self.status = "Checking detected managers for updates...".to_owned();
+            }
+            AppEvent::UpdateCheckResult { index, result } => {
+                if let Some(item) = self.items.get_mut(index) {
+                    item.update_availability = Some(result);
+                }
+            }
+            AppEvent::UpdateCheckFinished => {
+                self.checking_updates = false;
+                let count = self
+                    .items
+                    .iter()
+                    .filter(|item| {
+                        matches!(
+                            item.update_availability.as_ref(),
+                            Some(UpdateAvailability::Available { .. })
+                        )
+                    })
+                    .count();
+                let problems = self
+                    .items
+                    .iter()
+                    .filter(|item| {
+                        matches!(
+                            item.update_availability.as_ref(),
+                            Some(
+                                UpdateAvailability::Failed(_) | UpdateAvailability::Unavailable(_)
+                            )
+                        )
+                    })
+                    .count();
+                self.status = if count == 0 && problems == 0 {
+                    "Update check complete: no updates reported available.".to_owned()
+                } else if count == 0 {
+                    format!(
+                        "Update check complete: no updates available; {problems} check(s) need attention."
+                    )
+                } else {
+                    format!(
+                        "Update check complete: {count} manager update(s) available; {problems} check(s) need attention."
+                    )
+                };
             }
             AppEvent::UpdateFinished(failures) => {
                 self.updating = false;
@@ -203,6 +275,26 @@ impl App {
             .collect()
     }
 
+    pub fn selected_items_to_update(&self) -> (Vec<PackageManager>, usize) {
+        let mut skipped = 0;
+        let items = self
+            .selected_items()
+            .into_iter()
+            .filter(|item| {
+                if matches!(
+                    item.update_availability.as_ref(),
+                    Some(UpdateAvailability::UpToDate { .. })
+                ) {
+                    skipped += 1;
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+        (items, skipped)
+    }
+
     pub fn push_log(&mut self, message: String) {
         const MAX_LOG_LINES: usize = 200;
         self.logs.push_back(message);
@@ -219,7 +311,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, AppEvent, DetectedInfo};
+    use super::{App, AppEvent, DetectedInfo, UpdateAvailability};
 
     #[test]
     fn select_all_affects_only_detected_managers() {
@@ -307,5 +399,55 @@ mod tests {
         assert!(app.items[1].selected);
         assert_eq!(app.updating_index, Some(1));
         assert_eq!(app.status, "Updating pnpm (2/3)...");
+    }
+
+    #[test]
+    fn update_check_results_are_saved_per_manager() {
+        let mut app = App::new();
+        app.apply_event(AppEvent::UpdateCheckStarted);
+        app.apply_event(AppEvent::UpdateCheckResult {
+            index: 0,
+            result: UpdateAvailability::Available {
+                current: "10.0.0".to_owned(),
+                latest: "10.1.0".to_owned(),
+            },
+        });
+        app.apply_event(AppEvent::UpdateCheckFinished);
+
+        assert!(!app.checking_updates);
+        assert_eq!(
+            app.items[0].update_availability,
+            Some(UpdateAvailability::Available {
+                current: "10.0.0".to_owned(),
+                latest: "10.1.0".to_owned(),
+            })
+        );
+        assert_eq!(
+            app.status,
+            "Update check complete: 1 manager update(s) available; 0 check(s) need attention."
+        );
+    }
+
+    #[test]
+    fn update_run_excludes_checked_managers_that_are_current() {
+        let mut app = App::new();
+        app.items[0].detected = true;
+        app.items[0].selected = true;
+        app.items[0].update_availability = Some(UpdateAvailability::UpToDate {
+            current: "10.0.0".to_owned(),
+            latest: "10.0.0".to_owned(),
+        });
+        app.items[1].detected = true;
+        app.items[1].selected = true;
+        app.items[1].update_availability = Some(UpdateAvailability::Available {
+            current: "8.0.0".to_owned(),
+            latest: "9.0.0".to_owned(),
+        });
+
+        let (items, skipped) = app.selected_items_to_update();
+
+        assert_eq!(skipped, 1);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "pnpm");
     }
 }

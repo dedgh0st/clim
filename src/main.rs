@@ -1,7 +1,9 @@
 mod app;
 mod detector;
 mod executor;
+mod npm_compat;
 mod ui;
+mod update_check;
 
 use app::{App, AppEvent};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
@@ -69,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let mut update_task: Option<JoinHandle<()>> = None;
+    let mut check_task: Option<JoinHandle<()>> = None;
     let mut events = EventStream::new();
     let mut redraw = tokio::time::interval(Duration::from_millis(100));
 
@@ -78,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             event = events.next() => {
                 match event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                        if handle_key(key.code, &mut app, &sender, &mut update_task) {
+                        if handle_key(key.code, &mut app, &sender, &mut update_task, &mut check_task) {
                             break;
                         }
                     }
@@ -89,9 +92,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Some(event) = receiver.recv() => {
                 let finished_update = matches!(event, AppEvent::UpdateFinished(_));
+                let finished_check = matches!(event, AppEvent::UpdateCheckFinished);
                 app.apply_event(event);
                 if finished_update {
                     update_task = None;
+                }
+                if finished_check {
+                    check_task = None;
                 }
             }
             _ = redraw.tick() => {}
@@ -100,6 +107,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     scan_task.abort();
     if let Some(task) = update_task {
+        task.abort();
+    }
+    if let Some(task) = check_task {
         task.abort();
     }
     Ok(())
@@ -144,24 +154,58 @@ fn handle_key(
     app: &mut App,
     sender: &mpsc::UnboundedSender<AppEvent>,
     update_task: &mut Option<JoinHandle<()>>,
+    check_task: &mut Option<JoinHandle<()>>,
 ) -> bool {
     match key {
         KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => return true,
-        _ if app.updating => {}
+        _ if app.updating || app.checking_updates => {}
         KeyCode::Down | KeyCode::Char('j') => app.move_down(),
         KeyCode::Up | KeyCode::Char('k') => app.move_up(),
         KeyCode::Char(' ') => app.toggle_current(),
         KeyCode::Char('a') | KeyCode::Char('A') => app.toggle_select_all(),
+        KeyCode::Char('c') | KeyCode::Char('C') => {
+            if app.scanning {
+                app.status = "Wait for detection to finish before checking updates.".to_owned();
+            } else {
+                let detected: Vec<_> = app
+                    .items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| item.detected)
+                    .map(|(index, item)| (index, item.clone()))
+                    .collect();
+                if detected.is_empty() {
+                    app.status = "No detected package managers to check.".to_owned();
+                } else {
+                    app.checking_updates = true;
+                    app.status = "Checking detected managers for updates...".to_owned();
+                    let sender = sender.clone();
+                    *check_task = Some(tokio::spawn(async move {
+                        update_check::check_updates(detected, sender).await;
+                    }));
+                }
+            }
+        }
         KeyCode::Enter | KeyCode::Char('u') | KeyCode::Char('U') => {
             if app.scanning {
                 app.status = "Wait for detection to finish before updating.".to_owned();
             } else {
-                let selected = app.selected_items();
+                let (selected, skipped) = app.selected_items_to_update();
                 if selected.is_empty() {
-                    app.status = "Select at least one detected package manager.".to_owned();
+                    app.status = if skipped > 0 {
+                        format!("All {skipped} selected manager(s) are already up to date.")
+                    } else {
+                        "Select at least one detected package manager.".to_owned()
+                    };
                 } else {
                     app.updating = true;
-                    app.status = "Updating selected package managers...".to_owned();
+                    app.status = if skipped > 0 {
+                        format!(
+                            "Updating selected managers; skipping {skipped} already up to date."
+                        )
+                    } else {
+                        "Updating selected package managers...".to_owned()
+                    };
                     let sender = sender.clone();
                     *update_task = Some(tokio::spawn(async move {
                         executor::update_selected(selected, sender).await;

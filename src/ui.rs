@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::app::UpdateAvailability;
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -67,14 +68,32 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
             details.push_str(version);
         }
 
+        let availability = item.update_availability.as_ref().map(|state| match state {
+            UpdateAvailability::Checking => ("Checking...".to_owned(), Color::Cyan),
+            UpdateAvailability::UpToDate { .. } => ("Up to date".to_owned(), Color::Green),
+            UpdateAvailability::Available { latest, .. } => {
+                (format!("Update: {latest}"), Color::Yellow)
+            }
+            UpdateAvailability::Unavailable(_) => ("Check unavailable".to_owned(), Color::DarkGray),
+            UpdateAvailability::Failed(_) => ("Check failed".to_owned(), Color::Red),
+        });
         let mut line = vec![
             Span::styled(checkbox(item.selected), Style::default().fg(checkbox_color)),
             Span::styled(
                 format!(" {:<10}", item.name),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::styled(format!(" {details}"), Style::default().fg(Color::DarkGray)),
         ];
+        if let Some((label, color)) = availability {
+            line.push(Span::styled(
+                format!(" {label}"),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
+        line.push(Span::styled(
+            format!(" {details}"),
+            Style::default().fg(Color::DarkGray),
+        ));
         if app.updating_index == Some(index) {
             line.push(Span::styled(
                 "  << UPDATING",
@@ -139,6 +158,8 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
         Span::raw("Toggle  "),
         Span::styled("[A] ", Style::default().fg(Color::Yellow)),
         Span::raw("Select All  "),
+        Span::styled("[C] ", Style::default().fg(Color::Yellow)),
+        Span::raw("Check Updates  "),
         Span::styled("[Enter] ", Style::default().fg(Color::Yellow)),
         Span::raw(if app.updating {
             format!("Updating {}/{}  ", app.update_position, app.update_total)
