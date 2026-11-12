@@ -74,9 +74,17 @@ fn latest_compatible_npm_from_metadata(
 }
 
 fn npm_node_requirement_matches(range: &str, version: &semver::Version) -> bool {
+    let range = range.trim();
+    if range.is_empty() || range == "*" {
+        return true;
+    }
+
     range.split("||").any(|alternative| {
-        semver::VersionReq::parse(alternative.trim())
-            .is_ok_and(|requirement| requirement.matches(version))
+        let alternative = alternative.trim();
+        if alternative.is_empty() || alternative == "*" {
+            return true;
+        }
+        semver::VersionReq::parse(alternative).is_ok_and(|requirement| requirement.matches(version))
     })
 }
 
@@ -125,5 +133,21 @@ mod tests {
                 .unwrap(),
             Version::parse("12.2.2").unwrap()
         );
+    }
+
+    #[test]
+    fn wildcard_or_empty_node_ranges_match_every_supported_node() {
+        assert!(super::npm_node_requirement_matches(
+            "*",
+            &Version::parse("25.0.0").unwrap()
+        ));
+        assert!(super::npm_node_requirement_matches(
+            "  *  ",
+            &Version::parse("25.0.0").unwrap()
+        ));
+        assert!(super::npm_node_requirement_matches(
+            "^22.0.0 || *",
+            &Version::parse("25.0.0").unwrap()
+        ));
     }
 }

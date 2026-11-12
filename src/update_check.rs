@@ -291,41 +291,59 @@ async fn check_rustup(manager: &PackageManager) -> UpdateAvailability {
 }
 
 fn parse_version(input: &str) -> Option<String> {
+    let input = input.trim();
     let start = input.find(|character: char| character.is_ascii_digit())?;
     let version: String = input[start..]
         .chars()
-        .take_while(|character| character.is_ascii_digit() || *character == '.')
+        .take_while(|character| {
+            character.is_ascii_alphanumeric() || matches!(*character, '.' | '-' | '+')
+        })
         .collect();
     let version = version.trim_end_matches('.');
-    (!version.is_empty()).then(|| version.to_owned())
+    if version.is_empty() {
+        return None;
+    }
+
+    let version = version.trim_start_matches('v');
+    if version.is_empty() {
+        return None;
+    }
+
+    Some(version.to_owned())
 }
 
 fn compare_versions(current: &str, latest: &str) -> Option<std::cmp::Ordering> {
     let current = parse_version(current)?;
     let latest = parse_version(latest)?;
-    let current_parts = current
-        .split('.')
-        .map(str::parse::<u64>)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    let latest_parts = latest
-        .split('.')
-        .map(str::parse::<u64>)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    let length = current_parts.len().max(latest_parts.len());
-    for index in 0..length {
-        match current_parts
-            .get(index)
-            .copied()
-            .unwrap_or_default()
-            .cmp(&latest_parts.get(index).copied().unwrap_or_default())
-        {
-            std::cmp::Ordering::Equal => {}
-            ordering => return Some(ordering),
-        }
+    let current = normalize_semver(&current);
+    let latest = normalize_semver(&latest);
+    let current = semver::Version::parse(&current).ok()?;
+    let latest = semver::Version::parse(&latest).ok()?;
+    current.partial_cmp(&latest)
+}
+
+fn normalize_semver(version: &str) -> String {
+    let version = version.trim();
+    let (core, suffix) = match version.split_once('+') {
+        Some((core, suffix)) => (core, Some(format!("+{suffix}"))),
+        None => (version, None),
+    };
+    let (core, prerelease) = match core.split_once('-') {
+        Some((core, prerelease)) => (core, Some(format!("-{prerelease}"))),
+        None => (core, None),
+    };
+    let mut parts = core.split('.').filter(|part| !part.is_empty());
+    let major = parts.next().unwrap_or("0");
+    let minor = parts.next().unwrap_or("0");
+    let patch = parts.next().unwrap_or("0");
+    let mut normalized = format!("{major}.{minor}.{patch}");
+    if let Some(prerelease) = prerelease {
+        normalized.push_str(&prerelease);
     }
-    Some(std::cmp::Ordering::Equal)
+    if let Some(suffix) = suffix {
+        normalized.push_str(&suffix);
+    }
+    normalized
 }
 
 #[cfg(test)]
@@ -348,5 +366,17 @@ mod tests {
         assert_eq!(compare_versions("1.9.0", "1.10.0"), Some(Ordering::Less));
         assert_eq!(compare_versions("2.0", "2.0.0"), Some(Ordering::Equal));
         assert_eq!(compare_versions("3.1.0", "3.0.9"), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn compares_semver_prerelease_versions_correctly() {
+        assert_eq!(
+            compare_versions("1.0.0-beta.2", "1.0.0-beta.10"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_versions("Node.js v22.1.0", "22.1.0"),
+            Some(Ordering::Equal)
+        );
     }
 }
