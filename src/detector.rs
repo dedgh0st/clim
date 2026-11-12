@@ -130,7 +130,8 @@ pub(crate) fn command_for(path: &Path, args: &[&str]) -> Command {
                 invocation.push(' ');
                 invocation.push_str(arg);
             }
-            return command.arg(invocation);
+            command.arg(invocation);
+            return command;
         }
     }
 
